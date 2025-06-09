@@ -80,6 +80,10 @@ CANDIDATE_ROLE_IDS: set[int] = {
     1289488152301539339,    # もう一つの候補者ロール
 }
 
+# ダイエット・栄養採点用チャンネル
+DIET_SCORE_CHANNEL_ID: int = 839806186533421076
+NUTRITION_SCORE_CHANNEL_ID: int = 1381617555529142333
+
 # JSTタイムゾーン
 JST: timezone = timezone(timedelta(hours=9))
 
@@ -2523,6 +2527,54 @@ class GuideCountCog(commands.Cog):
 
 
 # ------------------------------------------------
+# HealthScoreCog（ダイエット・栄養採点）
+# ------------------------------------------------
+class HealthScoreCog(commands.Cog):
+    def __init__(self, bot: commands.Bot) -> None:
+        self.bot = bot
+
+    def _generate_score(self, text: str, mode: str) -> str | None:
+        prompt = f"""
+あなたは健康アドバイザーです。以下の記録を読み、{mode}の観点から10点満点で評価してください。
+短いアドバイスを一文添え、最後に『明日の運勢』も日本語で一言述べてください。
+# 記録
+{text}
+""".strip()
+        try:
+            resp = genai_client.models.generate_content(
+                model="gemini-2.5-flash-preview-05-20",
+                contents=prompt,
+                config=GenerateContentConfig(
+                    max_output_tokens=256,
+                    temperature=0.4,
+                    thinking_config=ThinkingConfig(thinking_budget=0),
+                ),
+            )
+            return "".join(getattr(p, "text", "") for p in resp.candidates[0].content.parts).strip()
+        except Exception as e:
+            logger.error(f"HealthScoreCog: Gemini error: {e}")
+            return None
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot:
+            return
+
+        await self.bot.process_commands(message)
+
+        mode = None
+        if message.channel.id == NUTRITION_SCORE_CHANNEL_ID:
+            mode = "栄養"
+        elif message.channel.id == DIET_SCORE_CHANNEL_ID:
+            mode = "ダイエット"
+
+        if mode:
+            result = self._generate_score(message.content, mode)
+            if result:
+                await message.reply(result)
+
+
+# ------------------------------------------------
 # EventCog（参加・退出・チャンネル削除などのイベントハンドラ）
 #   ✅ 参加制御ポリシーを追加
 #      1. 先にメインに入った人 → サブからキック
@@ -3618,6 +3670,7 @@ class MyBot(commands.Bot):
         await self.add_cog(DelayedActionCog(self))
         await self.add_cog(MonthlyCountCog(self))
         await self.add_cog(GuideCountCog(self))
+        await self.add_cog(HealthScoreCog(self))
         self.add_view(VCControlView())
 
     async def on_ready(self) -> None:
